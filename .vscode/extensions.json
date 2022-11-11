@@ -1,0 +1,8 @@
+{
+    "recommendations": [
+        "rust-lang.rust-analyzer",
+        "kevinkassimo.cargo-toml-snippets",
+        "serayuzgur.crates",
+        "bungcip.better-toml"
+    ]
+}

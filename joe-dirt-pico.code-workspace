@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"rust-analyzer.cargo.target": "thumbv6m-none-eabi",
+		"rust-analyzer.checkOnSave.command": "clippy",
+		"editor.formatOnSave": true,
+		"rust-analyzer.checkOnSave.allTargets": false,
+		"task.allowAutomaticTasks": "on"
+	}
+}

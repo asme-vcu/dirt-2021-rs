@@ -1,70 +1,134 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-//use cortex_m::prelude::_embedded_hal_serial_Read;
-use rp_pico as bsp;
+use defmt_rtt as _; // global logger
+use panic_probe as _; // panic handler
 
-use bsp::entry;
-use defmt::*;
-use defmt_rtt as _;
-//use embedded_hal::digital::v2::OutputPin;
-use panic_probe as _;
+#[rtic::app(device = rp_pico::hal::pac, peripherals = true)]
+mod app {
+    use defmt::*;
+    use embedded_hal::digital::v2::OutputPin;
+    use fugit::SecsDurationU32;
+    use rp_pico::{
+        hal::{
+            self, clocks::init_clocks_and_plls, gpio, timer::Alarm, watchdog::Watchdog, Clock, Sio,
+        },
+        XOSC_CRYSTAL_FREQ,
+    };
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    uart,
-    watchdog::Watchdog,
-};
+    type UartPin<P> = gpio::Pin<P, gpio::Function<gpio::Uart>>;
+    type Uart<P1, P2> =
+        hal::uart::UartPeripheral<hal::uart::Enabled, hal::pac::UART0, (UartPin<P1>, UartPin<P2>)>;
 
-#[entry]
-fn main() -> ! {
-    info!("Program start");
-    let mut pac = pac::Peripherals::take().unwrap();
-    //let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    const SCAN_TIME_US: SecsDurationU32 = SecsDurationU32::secs(1);
 
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    #[shared]
+    struct Shared {
+        timer: hal::Timer,
+        alarm: hal::timer::Alarm0,
+        led: gpio::Pin<gpio::bank0::Gpio25, gpio::PushPullOutput>,
+        uart: Uart<gpio::bank0::Gpio0, gpio::bank0::Gpio1>,
+    }
 
-    //let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    #[local]
+    struct Local {}
 
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
+    #[init]
+    fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
+        unsafe {
+            hal::sio::spinlock_reset();
+        }
 
-    //let mut led_pin = pins.led.into_push_pull_output();
-
-    let uart_pins = (pins.gpio0.into_mode(), pins.gpio1.into_mode());
-
-    let ibus = uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
-        .enable(uart::UartConfig::default(), clocks.peripheral_clock.freq())
+        let mut resets = cx.device.RESETS;
+        let mut watchdog = Watchdog::new(cx.device.WATCHDOG);
+        let clocks = init_clocks_and_plls(
+            XOSC_CRYSTAL_FREQ,
+            cx.device.XOSC,
+            cx.device.CLOCKS,
+            cx.device.PLL_SYS,
+            cx.device.PLL_USB,
+            &mut resets,
+            &mut watchdog,
+        )
+        .ok()
         .unwrap();
 
-    loop {
+        let sio = Sio::new(cx.device.SIO);
+        let pins = rp_pico::Pins::new(
+            cx.device.IO_BANK0,
+            cx.device.PADS_BANK0,
+            sio.gpio_bank0,
+            &mut resets,
+        );
+        let mut led = pins.led.into_push_pull_output();
+        led.set_low().unwrap();
+
+        let mut timer = hal::Timer::new(cx.device.TIMER, &mut resets);
+        let mut alarm = timer.alarm_0().unwrap();
+        let _ = alarm.schedule(SCAN_TIME_US);
+        alarm.enable_interrupt();
+
+        let mut uart = hal::uart::UartPeripheral::new(
+            cx.device.UART0,
+            (pins.gpio0.into_mode(), pins.gpio1.into_mode()),
+            &mut resets,
+        )
+        .enable(
+            hal::uart::common_configs::_115200_8_N_1,
+            clocks.peripheral_clock.freq(),
+        )
+        .unwrap();
+
+        uart.enable_rx_interrupt();
+
+        (
+            Shared {
+                timer,
+                alarm,
+                led,
+                uart,
+            },
+            Local {},
+            init::Monotonics(),
+        )
+    }
+
+    #[task(
+        binds = TIMER_IRQ_0,
+        priority = 1,
+        shared = [timer, alarm, led],
+        local = [tog: bool = true],
+    )]
+    fn timer_irq(mut cx: timer_irq::Context) {
+        if *cx.local.tog {
+            cx.shared.led.lock(|l| l.set_high().unwrap());
+        } else {
+            cx.shared.led.lock(|l| l.set_low().unwrap());
+        }
+
+        *cx.local.tog = !*cx.local.tog;
+
+        cx.shared.alarm.lock(|a| {
+            a.clear_interrupt();
+            let _ = a.schedule(SCAN_TIME_US);
+        })
+    }
+
+    #[task(
+        binds = UART0_IRQ,
+        priority = 1,
+        shared = [uart],
+        local = []
+    )]
+    fn uart_irq(mut cx: uart_irq::Context) {
         let mut buff = [0; 0x20];
 
-        if ibus.read_full_blocking(&mut buff).is_ok() {
-            info!("Read bytes {=[u8; 32]:02X}", buff);
-        }
+        cx.shared.uart.lock(|u| {
+            if u.read_full_blocking(&mut buff).is_ok() {
+                info!("Read bytes {=[u8; 32]:02X}", buff);
+            } else {
+                error!("Couldn't read bytes...");
+            }
+        })
     }
 }

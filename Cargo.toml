@@ -4,15 +4,13 @@ name = "joe-dirt-pico"
 version = "0.1.0"
 
 [dependencies]
-cortex-m = "0.7"
-cortex-m-rt = "0.7"
-embedded-hal = { version = "0.2", features = ["unproven"] }
-
 defmt = "0.3"
 defmt-rtt = "0.4"
+fugit = { version = "0.3", features = ["defmt"] }
 panic-probe = { version = "0.3", features = ["print-defmt"] }
-
-# We're using a Pico by default on this template
+cortex-m = "0.7"
+cortex-m-rtic = "1.1"
+embedded-hal = { version = "0.2", features = ["unproven"] }
 rp-pico = "0.5"
 
 # cargo build/run

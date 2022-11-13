@@ -1,24 +1,29 @@
 #![no_std]
 #![no_main]
 
-use defmt_rtt as _; // global logger
-use panic_probe as _; // panic handler
+pub use defmt_rtt as _; // global logger
+pub use panic_probe as _; // panic handler
+
+pub mod flysky_driver;
 
 #[rtic::app(device = rp_pico::hal::pac, peripherals = true)]
 mod app {
+    use crate::flysky_driver::Driver as Transciever;
+    use crate::flysky_driver::Error as TranscieverError;
     use defmt::*;
     use embedded_hal::digital::v2::OutputPin;
     use fugit::SecsDurationU32;
     use rp_pico::{
         hal::{
-            self, clocks::init_clocks_and_plls, gpio, timer::Alarm, watchdog::Watchdog, Clock, Sio,
+            self, clocks::init_clocks_and_plls, gpio, timer::Alarm, uart, watchdog::Watchdog,
+            Clock, Sio,
         },
         XOSC_CRYSTAL_FREQ,
     };
 
     type UartPin<P> = gpio::Pin<P, gpio::Function<gpio::Uart>>;
     type Uart<P1, P2> =
-        hal::uart::UartPeripheral<hal::uart::Enabled, hal::pac::UART0, (UartPin<P1>, UartPin<P2>)>;
+        uart::UartPeripheral<uart::Enabled, hal::pac::UART0, (UartPin<P1>, UartPin<P2>)>;
 
     const SCAN_TIME_US: SecsDurationU32 = SecsDurationU32::secs(1);
 
@@ -27,7 +32,7 @@ mod app {
         timer: hal::Timer,
         alarm: hal::timer::Alarm0,
         led: gpio::Pin<gpio::bank0::Gpio25, gpio::PushPullOutput>,
-        uart: Uart<gpio::bank0::Gpio0, gpio::bank0::Gpio1>,
+        transciever: Transciever<Uart<gpio::bank0::Gpio0, gpio::bank0::Gpio1>>,
     }
 
     #[local]
@@ -68,25 +73,27 @@ mod app {
         let _ = alarm.schedule(SCAN_TIME_US);
         alarm.enable_interrupt();
 
-        let mut uart = hal::uart::UartPeripheral::new(
+        let mut uart = uart::UartPeripheral::new(
             cx.device.UART0,
             (pins.gpio0.into_mode(), pins.gpio1.into_mode()),
             &mut resets,
         )
         .enable(
-            hal::uart::common_configs::_115200_8_N_1,
+            uart::common_configs::_115200_8_N_1,
             clocks.peripheral_clock.freq(),
         )
         .unwrap();
 
         uart.enable_rx_interrupt();
 
+        let transciever = Transciever::new(uart);
+
         (
             Shared {
                 timer,
                 alarm,
                 led,
-                uart,
+                transciever,
             },
             Local {},
             init::Monotonics(),
@@ -117,18 +124,51 @@ mod app {
     #[task(
         binds = UART0_IRQ,
         priority = 1,
-        shared = [uart],
-        local = []
+        shared = [transciever],
+        local = [count: usize = 0]
     )]
     fn uart_irq(mut cx: uart_irq::Context) {
-        let mut buff = [0; 0x20];
-
-        cx.shared.uart.lock(|u| {
-            if u.read_full_blocking(&mut buff).is_ok() {
-                info!("Read bytes {=[u8; 32]:02X}", buff);
-            } else {
-                error!("Couldn't read bytes...");
+        cx.shared.transciever.lock(|t| match t.read() {
+            Ok(output) => {
+                if let Some(dat) = output {
+                    //if *cx.local.count % 6 == 0 {
+                    info!("Recieved Channel data: {=[?; 14]}", dat);
+                    //}
+                    *cx.local.count += 1;
+                }
             }
-        })
+            Err(e) => match e {
+                TranscieverError::SerialError(_) => {
+                    error!("error while communicating with the bus");
+                }
+                TranscieverError::WouldBlock => {
+                    error!("operation would cause blocking");
+                }
+                TranscieverError::InvalidLength(got, expected) => {
+                    warn!(
+                        "invalid packet length: got {=u8}, expected {=u8}",
+                        got, expected
+                    );
+                }
+                TranscieverError::InvalidCommand(got, expected) => {
+                    warn!(
+                        "invalid packet command: got {=u8}, expected {=u8}",
+                        got, expected
+                    );
+                }
+                TranscieverError::InvalidChecksumL(got, expected) => {
+                    warn!(
+                        "invalid checksum lower byte: got {=u8}, expected {=u8}",
+                        got, expected
+                    );
+                }
+                TranscieverError::InvalidChecksumH(got, expected) => {
+                    warn!(
+                        "invalid checksum upper byte: got {=u8}, expected {=u8}",
+                        got, expected
+                    );
+                }
+            },
+        });
     }
 }

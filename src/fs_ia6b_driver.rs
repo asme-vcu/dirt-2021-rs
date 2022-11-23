@@ -1,3 +1,4 @@
+use defmt::{write, Format};
 use embedded_hal::serial::Read;
 
 const PROTOCOL_LENGTH: usize = 0x20; // 32 bytes per frame
@@ -20,6 +21,47 @@ impl<SerialError> From<nb::Error<SerialError>> for Error<SerialError> {
         match e {
             nb::Error::WouldBlock => Error::WouldBlock,
             nb::Error::Other(e) => Error::SerialError(e),
+        }
+    }
+}
+
+impl<SerialError> Format for Error<SerialError> {
+    fn format(&self, f: defmt::Formatter) {
+        match *self {
+            Error::SerialError(_) => {
+                write!(f, "bus communication error");
+            }
+            Error::WouldBlock => {
+                write!(f, "operation would cause blocking");
+            }
+            Error::InvalidLength(got, expected) => {
+                write!(
+                    f,
+                    "invalid packet length: got {=u8}, expected {=u8}",
+                    got, expected
+                );
+            }
+            Error::InvalidCommand(got, expected) => {
+                write!(
+                    f,
+                    "invalid packet command: got {=u8}, expected {=u8}",
+                    got, expected
+                );
+            }
+            Error::InvalidChecksumL(got, expected) => {
+                write!(
+                    f,
+                    "invalid checksum lower byte: got {=u8}, expected {=u8}",
+                    got, expected
+                );
+            }
+            Error::InvalidChecksumH(got, expected) => {
+                write!(
+                    f,
+                    "invalid checksum upper byte: got {=u8}, expected {=u8}",
+                    got, expected
+                );
+            }
         }
     }
 }

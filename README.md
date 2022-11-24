@@ -29,8 +29,10 @@ Follow the steps [here](https://github.com/rp-rs/rp2040-project-template). Note 
 
 Host Pi:
 
- - i-BUS input: GPIO0
- - i-BUS output: GPIO1
+ - FS-iA6B i-bus: GPIO1
+ - MPU-6050 SDA: GPIO2
+ - MPU-6050 SCK: GPIO3
+ - MPU-6050 INT: GPIO4
 
 Debugger:
 

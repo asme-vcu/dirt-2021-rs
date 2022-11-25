@@ -66,7 +66,7 @@ impl<SerialError> Format for Error<SerialError> {
     }
 }
 
-pub enum State {
+enum State {
     GetLength,
     GetCommand,
     GetData,
@@ -101,7 +101,7 @@ where
         }
     }
 
-    pub fn read(&mut self) -> Result<Option<[u16; PROTOCOL_CHANNELS]>, Error<ReadError>> {
+    pub fn read(&mut self) -> Result<Option<&[u16; PROTOCOL_CHANNELS]>, Error<ReadError>> {
         let byte = self.serial.read()?;
 
         match self.state {
@@ -170,7 +170,7 @@ where
                     // update state
                     self.state = State::GetLength;
                     // return data
-                    return Ok(Some(self.channel_data));
+                    return Ok(Some(&self.channel_data));
                 } else {
                     // reset packet frame & return error
                     self.state = State::GetLength;
